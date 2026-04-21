@@ -1,0 +1,478 @@
+import { useState, useMemo } from 'react'
+import { useData } from '../lib/DataContext'
+import { useAuth } from '../lib/AuthContext'
+import { supabase } from '../lib/supabase'
+import { KpiCard, StatusBadge, CampChip, BarRow, Tabs, Toggle, Alert, Empty, Modal, Field } from '../components/UI'
+
+// ─── STATS ────────────────────────────────────────────────────
+export function Stats() {
+  const { leads, users, teams, campaigns, statuses, isDormant, userName } = useData()
+  const [period, setPeriod] = useState('all')
+  const [tab, setTab] = useState('campaigns')
+
+  function pf(list) {
+    if (!period || period === 'all') return list
+    const ms = new Date(); ms.setDate(1); ms.setHours(0, 0, 0, 0)
+    const ws = new Date(); ws.setDate(ws.getDate() - ws.getDay()); ws.setHours(0, 0, 0, 0)
+    const td = new Date(); td.setHours(0, 0, 0, 0)
+    const from = period === 'month' ? ms.getTime() : period === 'week' ? ws.getTime() : td.getTime()
+    return list.filter(l => new Date(l.created_at).getTime() >= from)
+  }
+
+  const list = useMemo(() => pf(leads), [leads, period])
+  const r1 = list.filter(l => ['r1', 'r1h'].includes(l.status_id))
+  const r1h = list.filter(l => l.status_id === 'r1h')
+  const dorm = leads.filter(isDormant)
+  const closedIds = statuses.filter(s => s.phase === 'clos').map(s => s.id)
+
+  const maxVol = Math.max(...campaigns.map(c => list.filter(l => l.campaign_id === c.id).length), 1)
+  const maxSt = Math.max(...statuses.map(s => list.filter(l => l.status_id === s.id).length), 1)
+
+  const TABS = [
+    { id: 'campaigns', label: 'Campagnes' },
+    { id: 'users', label: 'Utilisateurs' },
+    { id: 'teams', label: 'Équipes' },
+    { id: 'statuses', label: 'Statuts' },
+  ]
+
+  return (
+    <div className="page">
+      <div className="page-header">
+        <div><div className="page-title">Statistiques</div><div className="page-sub">KPI complètes — entreprise, équipes, campagnes, utilisateurs</div></div>
+        <div className="page-actions">
+          <select className="filter-select" value={period} onChange={e => setPeriod(e.target.value)}>
+            <option value="all">Tout temps</option>
+            <option value="month">Ce mois</option>
+            <option value="week">Cette semaine</option>
+            <option value="today">Aujourd'hui</option>
+          </select>
+        </div>
+      </div>
+
+      <div className="kpi-grid kpi-5">
+        <KpiCard label="Volume" value={list.length} color="var(--blue-l)" />
+        <KpiCard label="R1 fixés" value={r1.length} sub={`${list.length ? Math.round(r1.length / list.length * 100) : 0}%`} color="var(--blue-l)" />
+        <KpiCard label="R1 honorés" value={r1h.length} sub={`${r1.length ? Math.round(r1h.length / r1.length * 100) : 0}% des fixés`} color="var(--green-l)" />
+        <KpiCard label="NRP total" value={list.filter(l => l.status_id?.startsWith('nrp')).length} color="var(--amber-l)" />
+        <KpiCard label="Dormants" value={dorm.length} color="var(--red-l)" />
+      </div>
+
+      <Tabs tabs={TABS} active={tab} onChange={setTab} />
+
+      {tab === 'campaigns' && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <div className="card">
+            <div className="card-header"><span className="card-title">Volume par campagne</span></div>
+            <div className="card-body">
+              {campaigns.map(c => {
+                const cnt = list.filter(l => l.campaign_id === c.id).length
+                return <BarRow key={c.id} label={<span style={{ color: c.color }}>{c.name}</span>} value={cnt} max={maxVol} color={c.color} />
+              })}
+            </div>
+          </div>
+          <div className="card">
+            <div className="card-header"><span className="card-title">Taux R1 par campagne</span></div>
+            <div className="card-body">
+              {campaigns.map(c => {
+                const cl = list.filter(l => l.campaign_id === c.id)
+                const r = cl.filter(l => ['r1', 'r1h'].includes(l.status_id)).length
+                const pct = cl.length ? Math.round(r / cl.length * 100) : 0
+                return <BarRow key={c.id} label={<span style={{ color: c.color }}>{c.name}</span>} value={pct} max={100} color={c.color} showPct />
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tab === 'users' && (
+        <div className="card">
+          <div className="card-header"><span className="card-title">Performance par utilisateur</span></div>
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr><th>Utilisateur</th><th>Rôle</th><th>Équipe</th><th>Leads</th><th>R1 fixés</th><th>R1 honorés</th><th>NRP 5</th><th>Pas intéressé</th><th>Taux contact</th><th>Actifs</th><th>Dormants</th></tr>
+              </thead>
+              <tbody>
+                {users.filter(u => ['agent', 'telephoniste'].includes(u.role)).map(u => {
+                  const ul = list.filter(l => l.agent_id === u.id)
+                  const r1u = ul.filter(l => ['r1', 'r1h'].includes(l.status_id)).length
+                  const r1hu = ul.filter(l => l.status_id === 'r1h').length
+                  const pi = ul.filter(l => l.status_id === 'pi').length
+                  const nrp5 = ul.filter(l => l.status_id === 'nrp5').length
+                  const contact = r1u + pi + nrp5 + ul.filter(l => l.status_id === 'rappeler').length
+                  const team = teams.find(t => t.id === u.team_id)
+                  const actifs = leads.filter(l => l.agent_id === u.id && !closedIds.includes(l.status_id)).length
+                  const dormants = leads.filter(l => l.agent_id === u.id && isDormant(l)).length
+                  return (
+                    <tr key={u.id}>
+                      <td><div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><div style={{ width: 16, height: 16, borderRadius: 3, background: u.color || '#3b82f6', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 7, fontWeight: 700, color: '#fff' }}>{u.prenom[0]}</div>{u.prenom} {u.nom}</div></td>
+                      <td style={{ fontSize: 9, color: 'var(--t3)' }}>{u.role}</td>
+                      <td>{team ? <span style={{ fontSize: 9, color: team.color, fontWeight: 700 }}>{team.name}</span> : '—'}</td>
+                      <td style={{ fontWeight: 600 }}>{ul.length}</td>
+                      <td style={{ color: 'var(--blue-l)', fontWeight: 600 }}>{r1u}</td>
+                      <td style={{ color: 'var(--green-l)' }}>{r1hu}</td>
+                      <td style={{ color: 'var(--amber-l)' }}>{nrp5}</td>
+                      <td style={{ color: 'var(--t2)' }}>{pi}</td>
+                      <td style={{ fontWeight: 600, color: ul.length && contact / ul.length > .2 ? 'var(--green-l)' : 'var(--amber-l)' }}>{ul.length ? Math.round(contact / ul.length * 100) : 0}%</td>
+                      <td>{actifs}</td>
+                      <td style={{ color: dormants > 0 ? 'var(--amber-l)' : 'var(--t3)' }}>{dormants}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {tab === 'teams' && (
+        <div className="card">
+          <div className="card-header"><span className="card-title">Performance par équipe</span></div>
+          <div className="table-wrap">
+            <table className="table">
+              <thead><tr><th>Équipe</th><th>Manager</th><th>Membres</th><th>Leads</th><th>R1 fixés</th><th>Taux R1</th><th>R1 honorés</th></tr></thead>
+              <tbody>
+                {teams.map(t => {
+                  const mbs = users.filter(u => u.team_id === t.id)
+                  const mgr = users.find(u => u.id === t.manager_id)
+                  const tl = list.filter(l => mbs.some(m => m.id === l.agent_id))
+                  const tr1 = tl.filter(l => ['r1', 'r1h'].includes(l.status_id)).length
+                  const tr1h = tl.filter(l => l.status_id === 'r1h').length
+                  return (
+                    <tr key={t.id}>
+                      <td><span style={{ fontWeight: 700, color: t.color }}>{t.name}</span></td>
+                      <td>{mgr ? `${mgr.prenom} ${mgr.nom}` : '—'}</td>
+                      <td>{mbs.length}</td>
+                      <td style={{ fontWeight: 600 }}>{tl.length}</td>
+                      <td style={{ color: 'var(--blue-l)', fontWeight: 600 }}>{tr1}</td>
+                      <td style={{ fontWeight: 700, color: 'var(--green-l)' }}>{tl.length ? Math.round(tr1 / tl.length * 100) : 0}%</td>
+                      <td style={{ color: 'var(--green-l)' }}>{tr1h}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {tab === 'statuses' && (
+        <div className="card">
+          <div className="card-header"><span className="card-title">Distribution des statuts</span></div>
+          <div className="card-body">
+            {statuses.map(s => {
+              const cnt = list.filter(l => l.status_id === s.id).length
+              if (!cnt) return null
+              return <BarRow key={s.id} label={<StatusBadge statusId={s.id} />} value={cnt} max={maxSt} color={s.color} />
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── DISPATCH ─────────────────────────────────────────────────
+export function Dispatch() {
+  const { users, campaigns, quotas, leads, statuses, computeNext, saveQuotas, userName } = useData()
+  const [localQuotas, setLocalQuotas] = useState({})
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+
+  const agents = users.filter(u => u.actif && ['agent', 'telephoniste'].includes(u.role))
+  const closedIds = statuses.filter(s => s.phase === 'clos').map(s => s.id)
+  const activeLeads = leads.filter(l => !closedIds.includes(l.status_id))
+
+  function getQ(campId, userId) {
+    const key = `${campId}_${userId}`
+    if (key in localQuotas) return localQuotas[key]
+    return quotas.find(q => q.campaign_id === campId && q.user_id === userId)?.quota || 0
+  }
+
+  function setQ(campId, userId, val) {
+    setLocalQuotas(prev => ({ ...prev, [`${campId}_${userId}`]: parseInt(val) || 0 }))
+    setSaved(false)
+  }
+
+  async function handleSave() {
+    setSaving(true)
+    const rows = []
+    campaigns.filter(c => c.actif).forEach(c => {
+      agents.forEach(u => {
+        rows.push({ campaign_id: c.id, user_id: u.id, quota: getQ(c.id, u.id) })
+      })
+    })
+    await saveQuotas(rows)
+    setSaving(false)
+    setSaved(true)
+    setTimeout(() => setSaved(false), 3000)
+  }
+
+  return (
+    <div className="page">
+      <div className="page-header">
+        <div><div className="page-title">Dispatch & Quotas</div><div className="page-sub">Quota pondéré budget × rééquilibrage dynamique charge active</div></div>
+        <div className="page-actions">
+          <button className="btn btn-primary btn-sm" onClick={handleSave} disabled={saving}>{saving ? 'Sauvegarde…' : saved ? '✓ Sauvegardé' : 'Sauvegarder dans Supabase'}</button>
+        </div>
+      </div>
+
+      <Alert type="info">Logique : quota pondéré par campagne × agent + rééquilibrage dynamique (l'agent avec le moins de leads actifs est prioritaire à quota égal). Le prochain lead est assigné automatiquement à la création ou à l'import.</Alert>
+
+      {/* Cards par campagne */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 20 }}>
+        {campaigns.filter(c => c.actif).map(c => {
+          const next = computeNext(c.id)
+          const cAgents = agents.filter(u => getQ(c.id, u.id) > 0)
+          return (
+            <div key={c.id} className="card" style={{ borderLeft: `2px solid ${c.color}` }}>
+              <div className="card-header">
+                <span className="card-title" style={{ color: c.color }}>{c.name}</span>
+                <CampChip campId={c.id} />
+              </div>
+              <div className="card-body">
+                {cAgents.map(u => {
+                  const q = getQ(c.id, u.id)
+                  const charge = activeLeads.filter(l => l.agent_id === u.id).length
+                  return (
+                    <div key={u.id} style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 7 }}>
+                      <div style={{ width: 18, height: 18, borderRadius: 4, background: u.color || '#3b82f6', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 8, fontWeight: 700, color: '#fff' }}>{u.prenom[0]}</div>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, marginBottom: 2 }}>
+                          <span style={{ color: 'var(--t2)' }}>{u.prenom} {u.nom[0]}.</span>
+                          <span style={{ color: 'var(--blue-l)', fontWeight: 700 }}>{q}%</span>
+                        </div>
+                        <div style={{ height: 4, background: 'var(--s3)', borderRadius: 2, overflow: 'hidden' }}>
+                          <div style={{ width: q + '%', height: '100%', background: 'var(--blue)', borderRadius: 2 }} />
+                        </div>
+                        <div style={{ fontSize: 8, color: 'var(--t3)' }}>Charge: {charge} actifs</div>
+                      </div>
+                    </div>
+                  )
+                })}
+                <div style={{ marginTop: 9, paddingTop: 8, borderTop: '1px solid var(--b1)', fontSize: 9, color: 'var(--t2)' }}>
+                  Prochain → <strong style={{ color: 'var(--blue-l)' }}>{next ? `${next.prenom} ${next.nom}` : '—'}</strong>
+                </div>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Quota matrix */}
+      <div className="card">
+        <div className="card-header"><span className="card-title">Matrice quotas (campagne × utilisateur) — modifiable en direct</span></div>
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Utilisateur</th>
+                <th>Rôle</th>
+                {campaigns.filter(c => c.actif).map(c => <th key={c.id} style={{ color: c.color }}>{c.code}</th>)}
+                <th>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {agents.map(u => {
+                const total = campaigns.filter(c => c.actif).reduce((a, c) => a + getQ(c.id, u.id), 0)
+                return (
+                  <tr key={u.id}>
+                    <td><div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><div style={{ width: 16, height: 16, borderRadius: 3, background: u.color || '#3b82f6', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 7, fontWeight: 700, color: '#fff' }}>{u.prenom[0]}</div>{u.prenom} {u.nom}</div></td>
+                    <td style={{ fontSize: 9, color: 'var(--t3)' }}>{u.role}</td>
+                    {campaigns.filter(c => c.actif).map(c => (
+                      <td key={c.id}>
+                        <input type="number" className="quota-input" min="0" max="100" value={getQ(c.id, u.id)} onChange={e => setQ(c.id, u.id, e.target.value)} />
+                      </td>
+                    ))}
+                    <td style={{ fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600, color: total > 100 ? 'var(--red-l)' : 'var(--t2)' }}>{total}%</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── CAMPAIGNS ────────────────────────────────────────────────
+export function Campaigns() {
+  const { campaigns, leads } = useData()
+  const [addOpen, setAddOpen] = useState(false)
+  const [form, setForm] = useState({ name: '', code: '', color: '#3b82f6', description: '' })
+  const [saving, setSaving] = useState(false)
+  const set = k => e => setForm(p => ({ ...p, [k]: e.target.value }))
+
+  async function handleAdd() {
+    if (!form.name) return
+    setSaving(true)
+    await supabase.from('campaigns').insert({ ...form, actif: true, mapping: { prenom: 'Prénom', nom: 'Nom', tel: 'Téléphone', email: 'Email', dob: 'Date naissance', canton: 'Canton' } })
+    setSaving(false)
+    setAddOpen(false)
+    setForm({ name: '', code: '', color: '#3b82f6', description: '' })
+  }
+
+  async function toggleCamp(id, current) {
+    await supabase.from('campaigns').update({ actif: !current }).eq('id', id)
+  }
+
+  async function delCamp(id) {
+    if (!confirm('Supprimer cette campagne ? Les leads restent en base.')) return
+    await supabase.from('campaigns').delete().eq('id', id)
+  }
+
+  return (
+    <div className="page">
+      <div className="page-header">
+        <div><div className="page-title">Campagnes marketing</div><div className="page-sub">Sources d'ingestion — gestion complète</div></div>
+        <div className="page-actions"><button className="btn btn-primary btn-sm" onClick={() => setAddOpen(true)}>+ Campagne</button></div>
+      </div>
+
+      <div className="card">
+        {campaigns.map(c => (
+          <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px', borderBottom: '1px solid var(--b1)' }}>
+            <div style={{ width: 8, height: 8, borderRadius: 2, background: c.color, flexShrink: 0 }} />
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 12, fontWeight: 600 }}>{c.name} <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)' }}>{c.code}</span></div>
+              <div style={{ fontSize: 10, color: 'var(--t3)' }}>{c.description || '—'} · {leads.filter(l => l.campaign_id === c.id).length} leads</div>
+            </div>
+            <Toggle checked={c.actif} onChange={() => toggleCamp(c.id, c.actif)} />
+            <button className="btn btn-danger btn-xs" onClick={() => delCamp(c.id)}>Supprimer</button>
+          </div>
+        ))}
+      </div>
+
+      <Modal open={addOpen} onClose={() => setAddOpen(false)} title="Nouvelle campagne"
+        footer={<><button className="btn btn-ghost" onClick={() => setAddOpen(false)}>Annuler</button><button className="btn btn-primary" onClick={handleAdd} disabled={saving}>{saving ? 'Création…' : 'Créer'}</button></>}
+      >
+        <div className="form-grid">
+          <Field label="Nom *" full><input className="form-input" value={form.name} onChange={set('name')} placeholder="LPP Estrategia" /></Field>
+          <Field label="Code court"><input className="form-input" value={form.code} onChange={set('code')} placeholder="LPP-ES" maxLength={8} /></Field>
+          <Field label="Couleur"><input className="form-input" type="color" value={form.color} onChange={set('color')} /></Field>
+          <Field label="Description" full><input className="form-input" value={form.description} onChange={set('description')} /></Field>
+        </div>
+      </Modal>
+    </div>
+  )
+}
+
+// ─── TEAMS ────────────────────────────────────────────────────
+export function Teams() {
+  const { users, teams, leads, statuses, isDormant } = useData()
+  const [addOpen, setAddOpen] = useState(false)
+  const [form, setForm] = useState({ prenom: '', nom: '', role: 'telephoniste', team_id: '', quota: '', color: '#3b82f6', goal_r1: '', email: '', password: '' })
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const set = k => e => setForm(p => ({ ...p, [k]: e.target.value }))
+
+  const closedIds = statuses.filter(s => s.phase === 'clos').map(s => s.id)
+  const activeLeads = leads.filter(l => !closedIds.includes(l.status_id))
+
+  async function handleAdd() {
+    if (!form.prenom || !form.nom || !form.email || !form.password) { setError('Tous les champs marqués * sont requis.'); return }
+    setSaving(true)
+    setError('')
+    // Create auth user via supabase admin (needs to be done via backend in production)
+    // For now: create profile only, admin manually creates auth user
+    const { error: err } = await supabase.from('crm_users').insert({
+      prenom: form.prenom, nom: form.nom, role: form.role,
+      team_id: form.team_id || null, quota: parseInt(form.quota) || 0,
+      color: form.color, actif: true, goal_r1: parseInt(form.goal_r1) || 15,
+      email: form.email, auth_id: null
+    })
+    if (err) { setError(err.message); setSaving(false); return }
+    setSaving(false)
+    setAddOpen(false)
+    setForm({ prenom: '', nom: '', role: 'telephoniste', team_id: '', quota: '', color: '#3b82f6', goal_r1: '', email: '', password: '' })
+  }
+
+  async function toggleUser(id, current) {
+    await supabase.from('crm_users').update({ actif: !current }).eq('id', id)
+  }
+
+  return (
+    <div className="page">
+      <div className="page-header">
+        <div><div className="page-title">Équipes & Utilisateurs</div><div className="page-sub">Gestion des accès et performances</div></div>
+        <div className="page-actions"><button className="btn btn-primary btn-sm" onClick={() => setAddOpen(true)}>+ Utilisateur</button></div>
+      </div>
+
+      {teams.map(t => {
+        const members = users.filter(u => u.team_id === t.id)
+        const mgr = users.find(u => u.id === t.manager_id)
+        return (
+          <div key={t.id} style={{ marginBottom: 20 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+              <div style={{ width: 3, height: 24, borderRadius: 2, background: t.color }} />
+              <div style={{ fontSize: 14, fontWeight: 700 }}>{t.name}</div>
+              <span style={{ fontSize: 10, color: 'var(--t3)' }}>Manager : {mgr ? `${mgr.prenom} ${mgr.nom}` : '—'}</span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
+              {members.map(u => {
+                const ul = leads.filter(l => l.agent_id === u.id)
+                const r1 = ul.filter(l => ['r1', 'r1h'].includes(l.status_id)).length
+                const uActive = activeLeads.filter(l => l.agent_id === u.id).length
+                const uDorm = leads.filter(l => l.agent_id === u.id && isDormant(l)).length
+                const goal = u.goal_r1 || 15
+                const pct = Math.min(100, Math.round(r1 / goal * 100))
+                const gColor = pct >= 100 ? 'var(--green)' : pct >= 60 ? 'var(--blue)' : 'var(--amber)'
+                return (
+                  <div key={u.id} className="user-card">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                      <div style={{ width: 28, height: 28, borderRadius: 7, background: u.color || t.color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: '#fff' }}>{u.prenom[0]}</div>
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: 600 }}>{u.prenom} {u.nom}</div>
+                        <div style={{ fontSize: 9, color: 'var(--t3)' }}>{u.role} · {u.actif ? 'Actif' : 'Inactif'}</div>
+                      </div>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 5, fontSize: 10, marginBottom: 8 }}>
+                      <div><div style={{ color: 'var(--t3)' }}>Total</div><div style={{ fontWeight: 600 }}>{ul.length}</div></div>
+                      <div><div style={{ color: 'var(--t3)' }}>Actifs</div><div style={{ fontWeight: 600 }}>{uActive}</div></div>
+                      <div><div style={{ color: 'var(--t3)' }}>R1</div><div style={{ fontWeight: 600, color: 'var(--green-l)' }}>{r1}</div></div>
+                      <div><div style={{ color: 'var(--t3)' }}>Dormants</div><div style={{ fontWeight: 600, color: uDorm > 0 ? 'var(--amber-l)' : 'var(--t3)' }}>{uDorm}</div></div>
+                    </div>
+                    <div style={{ fontSize: 9, color: 'var(--t3)', marginBottom: 3 }}>R1 : {r1}/{goal}</div>
+                    <div className="goal-bar"><div className="goal-fill" style={{ width: pct + '%', background: gColor }} /></div>
+                    <div style={{ marginTop: 8 }}>
+                      <button className="btn btn-ghost btn-xs" onClick={() => toggleUser(u.id, u.actif)}>{u.actif ? 'Désactiver' : 'Activer'}</button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )
+      })}
+
+      <Modal open={addOpen} onClose={() => setAddOpen(false)} title="Nouvel utilisateur"
+        footer={<><button className="btn btn-ghost" onClick={() => setAddOpen(false)}>Annuler</button><button className="btn btn-primary" onClick={handleAdd} disabled={saving}>{saving ? 'Création…' : 'Créer'}</button></>}
+      >
+        {error && <div style={{ color: 'var(--red-l)', fontSize: 11, marginBottom: 10 }}>{error}</div>}
+        <Alert type="info" style={{ marginBottom: 12 }}>Après création du profil, allez dans Supabase → Authentication → Users pour créer le compte de connexion avec le même email.</Alert>
+        <div className="form-grid">
+          <Field label="Prénom *"><input className="form-input" value={form.prenom} onChange={set('prenom')} /></Field>
+          <Field label="Nom *"><input className="form-input" value={form.nom} onChange={set('nom')} /></Field>
+          <Field label="Email * (pour la connexion)"><input className="form-input" type="email" value={form.email} onChange={set('email')} /></Field>
+          <Field label="Rôle">
+            <select className="form-select" value={form.role} onChange={set('role')}>
+              <option value="telephoniste">Téléphoniste</option>
+              <option value="agent">Agent</option>
+              <option value="manager">Manager</option>
+              <option value="admin">Admin</option>
+            </select>
+          </Field>
+          <Field label="Équipe">
+            <select className="form-select" value={form.team_id} onChange={set('team_id')}>
+              <option value="">— Aucune</option>
+              {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+          </Field>
+          <Field label="Quota global (%)"><input className="form-input" type="number" value={form.quota} onChange={set('quota')} placeholder="15" /></Field>
+          <Field label="Objectif R1 / mois"><input className="form-input" type="number" value={form.goal_r1} onChange={set('goal_r1')} placeholder="15" /></Field>
+          <Field label="Couleur avatar"><input className="form-input" type="color" value={form.color} onChange={set('color')} /></Field>
+        </div>
+      </Modal>
+    </div>
+  )
+}

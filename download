@@ -1,0 +1,272 @@
+import { useState, useMemo } from 'react'
+import { useData } from '../lib/DataContext'
+import { useAuth } from '../lib/AuthContext'
+import { KpiCard, StatusBadge, CampChip, BarRow, Alert, Empty, fDate, fDateTime, fDOB } from '../components/UI'
+import LeadDetail from '../components/LeadDetail'
+
+// ─── HELPERS ──────────────────────────────────────────────────
+function periodFilter(leads, period) {
+  if (!period || period === 'all') return leads
+  const ms = new Date(); ms.setDate(1); ms.setHours(0, 0, 0, 0)
+  const ws = new Date(); ws.setDate(ws.getDate() - ws.getDay()); ws.setHours(0, 0, 0, 0)
+  const td = new Date(); td.setHours(0, 0, 0, 0)
+  const from = period === 'month' ? ms.getTime() : period === 'week' ? ws.getTime() : td.getTime()
+  return leads.filter(l => new Date(l.created_at).getTime() >= from)
+}
+
+// ─── DASHBOARD ────────────────────────────────────────────────
+export function Dashboard() {
+  const { leads, statuses, campaigns, teams, users, isDormant, getStatus, getCamp, userName, settings } = useData()
+  const [period, setPeriod] = useState('all')
+  const [detailId, setDetailId] = useState(null)
+
+  const list = useMemo(() => periodFilter(leads, period), [leads, period])
+  const dormant = leads.filter(isDormant)
+  const r1 = list.filter(l => ['r1', 'r1h'].includes(l.status_id))
+  const r1h = list.filter(l => l.status_id === 'r1h')
+  const closed = statuses.filter(s => s.phase === 'clos').map(s => s.id)
+  const negClosed = list.filter(l => ['pi', 'hc', 'mn', 'nrp5', 'dup'].includes(l.status_id))
+
+  const maxSt = Math.max(...statuses.map(s => list.filter(l => l.status_id === s.id).length), 1)
+  const maxCa = Math.max(...campaigns.map(c => list.filter(l => l.campaign_id === c.id).length), 1)
+
+  return (
+    <div className="page">
+      <div className="page-header">
+        <div><div className="page-title">Dashboard global</div><div className="page-sub">Administrateur — temps réel Supabase</div></div>
+        <div className="page-actions">
+          <select className="filter-select" value={period} onChange={e => setPeriod(e.target.value)}>
+            <option value="all">Tout temps</option>
+            <option value="month">Ce mois</option>
+            <option value="week">Cette semaine</option>
+            <option value="today">Aujourd'hui</option>
+          </select>
+        </div>
+      </div>
+
+      {dormant.length > 0 && <Alert type="warning" onAction={() => {}} actionLabel="Voir →"><strong>{dormant.length} lead(s) dormant(s)</strong> sans activité depuis +{settings.dormantHours || 48}h</Alert>}
+
+      <div className="kpi-grid kpi-5">
+        <KpiCard label="Total leads" value={list.length} sub="Base consolidée" color="var(--blue-l)" />
+        <KpiCard label="NEW" value={list.filter(l => l.status_id === 'NEW').length} sub="Non traités" color="var(--purple)" />
+        <KpiCard label="R1 fixés" value={r1.length} sub={`${list.length ? Math.round(r1.length / list.length * 100) : 0}% du volume`} color="var(--green-l)" />
+        <KpiCard label="Dormants" value={dormant.length} sub={`+${settings.dormantHours || 48}h`} color="var(--amber-l)" />
+        <KpiCard label="Clos négatifs" value={negClosed.length} sub="PI + HC + MN + NRP5" color="var(--red-l)" />
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 14 }}>
+        <div className="card">
+          <div className="card-header"><span className="card-title">Répartition statuts</span></div>
+          <div className="card-body">
+            {statuses.map(s => {
+              const c = list.filter(l => l.status_id === s.id).length
+              if (!c) return null
+              return <BarRow key={s.id} label={<StatusBadge statusId={s.id} />} value={c} max={maxSt} color={s.color} />
+            })}
+          </div>
+        </div>
+        <div className="card">
+          <div className="card-header"><span className="card-title">Volume par campagne</span></div>
+          <div className="card-body">
+            {campaigns.map(c => {
+              const cnt = list.filter(l => l.campaign_id === c.id).length
+              return <BarRow key={c.id} label={<span style={{ color: c.color, fontSize: 10 }}>{c.name}</span>} value={cnt} max={maxCa} color={c.color} />
+            })}
+          </div>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-header"><span className="card-title">Derniers leads</span></div>
+        <div className="table-wrap">
+          <table className="table">
+            <thead><tr><th>Lead</th><th>Né le</th><th>Campagne</th><th>Statut</th><th>Utilisateur</th><th>Entrée</th></tr></thead>
+            <tbody>
+              {list.slice(0, 10).map(l => (
+                <tr key={l.id} className="clickable" onClick={() => setDetailId(l.id)}>
+                  <td><strong>{l.prenom} {l.nom}</strong></td>
+                  <td style={{ fontFamily: 'var(--mono)', fontSize: 10 }}>{fDOB(l.dob)}</td>
+                  <td><CampChip campId={l.campaign_id} /></td>
+                  <td><StatusBadge statusId={l.status_id} /></td>
+                  <td style={{ fontSize: 11 }}>{userName(l.agent_id)}</td>
+                  <td style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--t3)' }}>{fDate(l.created_at)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      {detailId && <LeadDetail leadId={detailId} onClose={() => setDetailId(null)} />}
+    </div>
+  )
+}
+
+// ─── PIPELINE ─────────────────────────────────────────────────
+export function Pipeline() {
+  const { leads, statuses, campaigns, users, isDormant, userName } = useData()
+  const [filterCamp, setFilterCamp] = useState('')
+  const [filterUser, setFilterUser] = useState('')
+  const [detailId, setDetailId] = useState(null)
+
+  let list = leads
+  if (filterCamp) list = list.filter(l => l.campaign_id === filterCamp)
+  if (filterUser) list = list.filter(l => l.agent_id === filterUser)
+
+  return (
+    <div className="page">
+      <div className="page-header">
+        <div><div className="page-title">Pipeline Kanban</div></div>
+        <div className="page-actions">
+          <select className="filter-select" value={filterCamp} onChange={e => setFilterCamp(e.target.value)}>
+            <option value="">Toutes campagnes</option>
+            {campaigns.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          <select className="filter-select" value={filterUser} onChange={e => setFilterUser(e.target.value)}>
+            <option value="">Tous utilisateurs</option>
+            {users.filter(u => u.actif).map(u => <option key={u.id} value={u.id}>{u.prenom} {u.nom}</option>)}
+          </select>
+        </div>
+      </div>
+      <div className="kanban-board">
+        {statuses.sort((a, b) => a.sort_order - b.sort_order).map(s => {
+          const col = list.filter(l => l.status_id === s.id)
+          return (
+            <div key={s.id} className="kanban-col">
+              <div className="kanban-col-header">
+                <div className="kanban-col-title">{s.label}</div>
+                <div className="kanban-col-count">{col.length} lead{col.length !== 1 ? 's' : ''}</div>
+                <div className="kanban-col-bar" style={{ background: s.color }} />
+              </div>
+              <div className="kanban-cards">
+                {col.map(l => {
+                  const u = users.find(x => x.id === l.agent_id)
+                  const dorm = isDormant(l)
+                  return (
+                    <div key={l.id} className="kanban-card" onClick={() => setDetailId(l.id)}>
+                      <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 3 }}>{l.prenom} {l.nom}</div>
+                      <div style={{ fontSize: 9, color: 'var(--t3)', display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 6 }}>
+                        <CampChip campId={l.campaign_id} />
+                        {l.canton && <span>{l.canton}</span>}
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        {u && <div style={{ width: 15, height: 15, borderRadius: 3, background: u.color || '#3b82f6', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 7, fontWeight: 700, color: '#fff' }}>{u.prenom[0]}</div>}
+                        <span style={{ fontSize: 9, color: 'var(--t3)', flex: 1 }}>{userName(l.agent_id)}</span>
+                        {dorm && <span style={{ fontSize: 8, color: 'var(--amber-l)', fontWeight: 700 }}>⚠{Math.floor((Date.now() - new Date(l.last_activity).getTime()) / 3600000)}h</span>}
+                        <span style={{ fontSize: 8, fontFamily: 'var(--mono)', color: 'var(--t4)' }}>{Math.floor((Date.now() - new Date(l.created_at).getTime()) / 86400000)}j</span>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+      {detailId && <LeadDetail leadId={detailId} onClose={() => setDetailId(null)} />}
+    </div>
+  )
+}
+
+// ─── DORMANT ──────────────────────────────────────────────────
+export function Dormant() {
+  const { leads, statuses, isDormant, userName, settings } = useData()
+  const { isAdmin, isManager, profile } = useAuth()
+  const [detailId, setDetailId] = useState(null)
+
+  let list = leads.filter(isDormant).sort((a, b) => new Date(a.last_activity) - new Date(b.last_activity))
+  if (!isAdmin && !isManager) list = list.filter(l => l.agent_id === profile?.id)
+
+  return (
+    <div className="page">
+      <div className="page-header">
+        <div><div className="page-title">Alertes dormance</div><div className="page-sub">{list.length} lead{list.length !== 1 ? 's' : ''} sans activité depuis +{settings.dormantHours || 48}h</div></div>
+      </div>
+      <div className="card">
+        <div className="table-wrap">
+          <table className="table">
+            <thead><tr><th>Lead</th><th>Campagne</th><th>Utilisateur</th><th>Statut</th><th>Dernière activité</th><th>Délai</th><th>RDV prévu</th><th>Action</th></tr></thead>
+            <tbody>
+              {list.length === 0 && <tr><td colSpan={8} style={{ textAlign: 'center', padding: 28, color: 'var(--green-l)' }}>✓ Aucune alerte active</td></tr>}
+              {list.map(l => (
+                <tr key={l.id} className="clickable row-dormant" onClick={() => setDetailId(l.id)}>
+                  <td><strong>{l.prenom} {l.nom}</strong></td>
+                  <td><CampChip campId={l.campaign_id} /></td>
+                  <td style={{ fontSize: 11 }}>{userName(l.agent_id)}</td>
+                  <td><StatusBadge statusId={l.status_id} /></td>
+                  <td style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t2)' }}>{fDateTime(l.last_activity)}</td>
+                  <td><span style={{ color: 'var(--amber-l)', fontWeight: 700, fontFamily: 'var(--mono)' }}>{Math.floor((Date.now() - new Date(l.last_activity).getTime()) / 3600000)}h</span></td>
+                  <td style={{ fontSize: 10, color: 'var(--blue-l)' }}>{l.rdv_date ? fDateTime(l.rdv_date) : '—'}</td>
+                  <td onClick={e => e.stopPropagation()}><button className="btn btn-warning btn-xs" onClick={() => setDetailId(l.id)}>Traiter</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      {detailId && <LeadDetail leadId={detailId} onClose={() => setDetailId(null)} />}
+    </div>
+  )
+}
+
+// ─── RDV PAGE ─────────────────────────────────────────────────
+export function RDV() {
+  const { leads, userName } = useData()
+  const { profile, isAdmin, isManager } = useAuth()
+  const [filter, setFilter] = useState('')
+  const [detailId, setDetailId] = useState(null)
+
+  let list = leads.filter(l => ['r1', 'r1h', 'r1nh'].includes(l.status_id))
+  if (!isAdmin && !isManager) list = list.filter(l => l.agent_id === profile?.id)
+  if (filter) list = list.filter(l => l.status_id === filter)
+
+  const fixed = list.filter(l => l.status_id === 'r1').length
+  const honored = list.filter(l => l.status_id === 'r1h').length
+  const missed = list.filter(l => l.status_id === 'r1nh').length
+  const upcoming = list.filter(l => l.rdv_date && new Date(l.rdv_date).getTime() > Date.now()).length
+
+  return (
+    <div className="page">
+      <div className="page-header">
+        <div><div className="page-title">RDV</div><div className="page-sub">Rendez-vous fixés, honorés, non honorés</div></div>
+        <div className="page-actions">
+          <select className="filter-select" value={filter} onChange={e => setFilter(e.target.value)}>
+            <option value="">Tous</option>
+            <option value="r1">R1 fixés</option>
+            <option value="r1h">R1 honorés</option>
+            <option value="r1nh">R1 non honorés</option>
+          </select>
+        </div>
+      </div>
+      <div className="kpi-grid kpi-4">
+        <KpiCard label="R1 fixés" value={fixed} color="var(--blue-l)" />
+        <KpiCard label="R1 honorés" value={honored} sub={`${fixed + honored + missed ? Math.round(honored / (fixed + honored + missed) * 100) : 0}% des fixés`} color="var(--green-l)" />
+        <KpiCard label="R1 non honorés" value={missed} color="var(--red-l)" />
+        <KpiCard label="À venir" value={upcoming} color="var(--amber-l)" />
+      </div>
+      <div className="card">
+        <div className="table-wrap">
+          <table className="table">
+            <thead><tr><th>Lead</th><th>Né le</th><th>Canton</th><th>Campagne</th><th>Utilisateur</th><th>Statut</th><th>Date RDV</th><th>Note</th><th>Action</th></tr></thead>
+            <tbody>
+              {list.length === 0 && <Empty text="Aucun RDV" />}
+              {list.map(l => (
+                <tr key={l.id} className="clickable" onClick={() => setDetailId(l.id)}>
+                  <td><strong>{l.prenom} {l.nom}</strong></td>
+                  <td style={{ fontFamily: 'var(--mono)', fontSize: 10 }}>{fDOB(l.dob)}</td>
+                  <td style={{ fontSize: 11, color: 'var(--t2)' }}>{l.canton || '—'}</td>
+                  <td><CampChip campId={l.campaign_id} /></td>
+                  <td style={{ fontSize: 11 }}>{userName(l.agent_id)}</td>
+                  <td><StatusBadge statusId={l.status_id} /></td>
+                  <td style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--blue-l)' }}>{l.rdv_date ? fDateTime(l.rdv_date) : '—'}</td>
+                  <td style={{ fontSize: 10, color: 'var(--t2)', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{(l.notes || '').slice(0, 60)}</td>
+                  <td onClick={e => e.stopPropagation()}><button className="btn btn-ghost btn-xs" onClick={() => setDetailId(l.id)}>Ouvrir</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      {detailId && <LeadDetail leadId={detailId} onClose={() => setDetailId(null)} />}
+    </div>
+  )
+}
