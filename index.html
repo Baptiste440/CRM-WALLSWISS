@@ -1,46 +1,12 @@
-import { useState } from 'react'
-import { useAuth } from '../lib/AuthContext'
-
-export default function Login() {
-  const { signIn } = useAuth()
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [error, setError] = useState('')
-  const [loading, setLoading] = useState(false)
-
-  async function handleLogin(e) {
-    e.preventDefault()
-    setLoading(true)
-    setError('')
-    const err = await signIn(email, password)
-    if (err) { setError(err.message === 'Invalid login credentials' ? 'Email ou mot de passe incorrect.' : err.message) }
-    setLoading(false)
-  }
-
-  return (
-    <div className="login-page">
-      <div className="login-box">
-        <div className="login-logo">Patrimoine<em>CRM</em></div>
-        <div className="login-sub">Connectez-vous à votre espace de travail</div>
-        <form onSubmit={handleLogin}>
-          <div className="form-group" style={{ marginBottom: 10 }}>
-            <label className="form-label">Email</label>
-            <input className="form-input" type="email" placeholder="nom@entreprise.com" value={email} onChange={e => setEmail(e.target.value)} required autoFocus />
-          </div>
-          <div className="form-group" style={{ marginBottom: 20 }}>
-            <label className="form-label">Mot de passe</label>
-            <input className="form-input" type="password" placeholder="••••••••" value={password} onChange={e => setPassword(e.target.value)} required />
-          </div>
-          {error && <div style={{ color: 'var(--red-l)', fontSize: 11, marginBottom: 12 }}>{error}</div>}
-          <button className="btn btn-primary" type="submit" disabled={loading} style={{ width: '100%', justifyContent: 'center', padding: '9px 0', fontSize: 13 }}>
-            {loading ? <><div className="spinner" /> Connexion…</> : 'Se connecter'}
-          </button>
-        </form>
-        <div style={{ fontSize: 10, color: 'var(--t3)', marginTop: 20, textAlign: 'center', lineHeight: 1.6 }}>
-          Accès sécurisé — chaque utilisateur a son propre compte.<br />
-          Contactez un administrateur pour obtenir vos accès.
-        </div>
-      </div>
-    </div>
-  )
-}
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PatrimoineCRM</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
